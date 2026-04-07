@@ -5,10 +5,13 @@ import { Download, Plus, Trash2, Eye, Save, RotateCcw, ChevronDown, Calendar, Bo
  * 三今設計 報價單系統
  * 功能: 工班選擇 -> 細項編輯 -> Excel生成 -> Google Drive版本管理
  * 後端: Google Sheets + Google Drive + Google Apps Script
+ * 更新時間: 2026-04-07 16:32 (Rebuild)
  */
 
+const unitOptionsInitial = ['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點'];
+
 const QuotationSystem = () => {
-  const API_BASE = 'https://script.google.com/macros/s/AKfycbw7yqxg_ZMvrIpQyx9j5-Qj0EXtgBN8ULru4zl3Joiy2bNldPnKGeXgcGUyK4PbLefVhw/exec'; // 需配置
+  const API_BASE = 'https://script.google.com/macros/s/AKfycbw7yqxg_ZMvrIpQyx9j5-Qj0EXtgBN8ULru4zl3Joiy2bNldPnKGeXgcGUyK4PbLefVhw/exec'; 
 
   // ============ 狀態管理 ============
   const [step, setStep] = useState(1); // 1:工班選擇 2:細項編輯 3:計算與確認 4:版本預覽
