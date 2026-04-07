@@ -5,7 +5,7 @@ import { Download, Plus, Trash2, Eye, Save, RotateCcw, ChevronDown, Calendar, Bo
  * 三今設計 報價單系統
  * 功能: 工班選擇 -> 細項編輯 -> Excel生成 -> Google Drive版本管理
  * 後端: Google Sheets + Google Drive + Google Apps Script
- * 更新時間: 2026-04-07 16:32 (Rebuild)
+ * 更新時間: 2026-04-07 16:42 (Force Redeploy)
  */
 
 const unitOptionsInitial = ['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點'];
@@ -451,8 +451,8 @@ const QuotationSystem = () => {
 
     const breakdown = [
       { label: '工程費小計', value: subtotal },
-      { label: '材料利潤 (' + (profitMargin * 100).toFixed(0) + '%)', value: profitAmount },
-      { label: '小計', value: afterMaterial },
+      { label: '材料利潤 (' + (profitMargin * 100).toFixed(0) + '%) ', value: profitAmount },
+      { label: ' 項目小計', value: afterMaterial },
       { label: '管理監工費 (' + (managementFeeRate * 100).toFixed(0) + '%)', value: managementFee },
       { label: '稅前小計', value: subtotalWithProfit }
     ];
