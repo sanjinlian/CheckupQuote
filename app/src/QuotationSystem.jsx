@@ -28,6 +28,7 @@ const QuotationSystem = () => {
   const [editingItems, setEditingItems] = useState([]);
   const [isAddingItem, setIsAddingItem] = useState(false);
   const [newItem, setNewItem] = useState({ name: '', quantity: '', unit: '式', price: '', margin: profitMargin });
+  const [unitOptions, setUnitOptions] = useState(['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點']);
   const [draggedItemIdx, setDraggedItemIdx] = useState(null);
   const [dragEnabledIdx, setDragEnabledIdx] = useState(null);
 
@@ -176,9 +177,22 @@ const QuotationSystem = () => {
       }
     };
 
+    const fetchUniqueUnits = async () => {
+      try {
+        const res = await fetch(`${API_BASE}?action=getUniqueUnits`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) setUnitOptions(json.data);
+        }
+      } catch (err) {
+        console.warn('動態單位抓取失敗，使用預設值');
+      }
+    };
+
     fetchConfig();
     fetchWorkClasses();
     fetchVersionHistory();
+    fetchUniqueUnits();
 
     // 檢查是否有未完成的草稿
     const draftStr = localStorage.getItem('CheckupQuote_Draft');
@@ -887,20 +901,6 @@ const QuotationSystem = () => {
   // 步驟 2: 細項編輯
   const renderStep2 = () => (
     <div className="space-y-6">
-      <datalist id="unit-options">
-        <option value="式" />
-        <option value="才" />
-        <option value="尺" />
-        <option value="cm" />
-        <option value="坪" />
-        <option value="kg" />
-        <option value="m" />
-        <option value="m2" />
-        <option value="組" />
-        <option value="個" />
-        <option value="樘" />
-        <option value="車" />
-      </datalist>
       <div className="flex gap-3 mb-4">
         <button
           onClick={() => setStep(1)}
@@ -1033,19 +1033,20 @@ const QuotationSystem = () => {
                           </td>
                           <td className="px-4 py-2 text-center">
                             {isEditing ? (
-                              <input
-                                type="text"
-                                list="unit-options"
-                                value={item.單位}
-                                onChange={(e) => {
-                                  const updated = [...editingItems];
-                                  updated[idx].單位 = e.target.value;
-                                  setEditingItems(updated);
-                                }}
-                                className="w-full text-center px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                              />
+                                <select
+                                  value={item.單位}
+                                  onChange={(e) => {
+                                    const updated = [...editingItems];
+                                    updated[idx].單位 = e.target.value;
+                                    setEditingItems(updated);
+                                  }}
+                                  className="w-full text-center px-1 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer font-medium text-sm"
+                                >
+                                  {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                                  {!unitOptions.includes(item.單位) && <option value={item.單位}>{item.單位}</option>}
+                                </select>
                             ) : (
-                              item.單位
+                              <span className="font-medium">{item.單位}</span>
                             )}
                           </td>
                           <td className="px-4 py-2 text-right">
@@ -1101,14 +1102,13 @@ const QuotationSystem = () => {
                         onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
                         className="px-2 py-1 border border-gray-300 rounded text-sm"
                       />
-                      <input
-                        type="text"
-                        list="unit-options"
-                        placeholder="單位"
+                      <select
                         value={newItem.unit}
                         onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
-                        className="px-2 py-1 border border-gray-300 rounded text-sm"
-                      />
+                        className="px-2 py-1.5 border border-gray-300 rounded text-sm bg-white cursor-pointer focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
                       <input
                         type="number"
                         placeholder="單價"

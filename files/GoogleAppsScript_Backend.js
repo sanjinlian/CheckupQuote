@@ -64,6 +64,9 @@ function doGet(e) {
       case 'checkNeedPassword':
         response = checkNeedPassword();
         break;
+      case 'getUniqueUnits':
+        response = getUniqueUnits();
+        break;
       default:
         response = { success: false, error: '未知的操作: ' + action };
     }
@@ -539,4 +542,31 @@ function testGetWorkClasses() {
 function testGetCompanyConfig() {
   const result = getCompanyConfig();
   Logger.log(JSON.stringify(result, null, 2));
+}
+
+// ============ 獲取所有出現過的單位 (從 E 欄) ============
+function getUniqueUnits() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+    const units = new Set(['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點']);
+    
+    // 掃描模板表與自訂表
+    const sheetsToScan = [CONFIG.SHEETS.WORK_ITEM_TEMPLATES, CONFIG.SHEETS.CUSTOM_WORK_ITEMS];
+    
+    sheetsToScan.forEach(sheetName => {
+      const sheet = spreadsheet.getSheetByName(sheetName);
+      if (sheet && sheet.getLastRow() >= 2) {
+        // 單位在 E 欄 (index 4)
+        const data = sheet.getRange(2, 5, sheet.getLastRow() - 1, 1).getValues();
+        data.forEach(row => {
+          const val = row[0] ? row[0].toString().trim() : '';
+          if (val) units.add(val);
+        });
+      }
+    });
+
+    return { success: true, data: Array.from(units) };
+  } catch (e) {
+    return { success: false, error: e.toString() };
+  }
 }
