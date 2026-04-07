@@ -14,7 +14,8 @@ const QuotationSystem = () => {
   const [step, setStep] = useState(1); // 1:工班選擇 2:細項編輯 3:計算與確認 4:版本預覽
   const [projectName, setProjectName] = useState('');
   const [projectArea, setProjectArea] = useState(48);
-  const [profitMargin, setProfitMargin] = useState(0.35);
+  const [profitMargin, setProfitMargin] = useState(0); // 材料利潤預設改為0
+  const [managementFeeRate, setManagementFeeRate] = useState(0.30); // 項目管理費率%
   const [taxRate, setTaxRate] = useState(0.05);
   const [includeTax, setIncludeTax] = useState(false);
   const [availableWorkClasses, setAvailableWorkClasses] = useState([]);
@@ -166,8 +167,10 @@ const QuotationSystem = () => {
         if (configRes.ok) {
           const json = await configRes.json();
           if (json.success && json.data) {
-            if (json.data.profit_margin) setProfitMargin(parseFloat(json.data.profit_margin));
+            // // 預設強制為0，不再跟隨全域預設
+            // if (json.data.profit_margin) setProfitMargin(parseFloat(json.data.profit_margin));
             if (json.data.tax_rate) setTaxRate(parseFloat(json.data.tax_rate));
+            if (json.data.management_fee_rate) setManagementFeeRate(parseFloat(json.data.management_fee_rate));
           }
         }
       } catch (e) {
@@ -215,6 +218,7 @@ const QuotationSystem = () => {
       projectName,
       projectArea,
       profitMargin,
+      managementFeeRate,
       taxRate,
       includeTax,
       selectedWorkClasses: Array.from(selectedWorkClasses),
@@ -222,7 +226,7 @@ const QuotationSystem = () => {
       timestamp: new Date().getTime()
     };
     localStorage.setItem('CheckupQuote_Draft', JSON.stringify(draft));
-  }, [projectName, projectArea, profitMargin, taxRate, includeTax, selectedWorkClasses, workClassDetails]);
+  }, [projectName, projectArea, profitMargin, managementFeeRate, taxRate, includeTax, selectedWorkClasses, workClassDetails]);
 
   // ============ 操作草稿 ============
   const handleRestoreDraft = () => {
@@ -233,7 +237,8 @@ const QuotationSystem = () => {
 
       setProjectName(draft.projectName || '');
       setProjectArea(draft.projectArea || 48);
-      setProfitMargin(draft.profitMargin || 0.35);
+      setProfitMargin(draft.profitMargin || 0);
+      setManagementFeeRate(draft.managementFeeRate || 0.30);
       setTaxRate(draft.taxRate || 0.05);
       setIncludeTax(draft.includeTax || false);
       setSelectedWorkClasses(new Set(draft.selectedWorkClasses || []));
@@ -433,18 +438,19 @@ const QuotationSystem = () => {
       items.push(...categoryItems);
     }
 
-    const managementFee = subtotal * 0.30; // 30% 管理費
-    const afterManagement = subtotal + managementFee;
-    const profitAmount = afterManagement * profitMargin;
-    const subtotalWithProfit = afterManagement + profitAmount;
+    const profitAmount = subtotal * profitMargin;       // 材料利潤 = 工程費小計 * ％
+    const afterMaterial = subtotal + profitAmount;      // 項目小計 = 工程費小計 + 材料利潤
+
+    const managementFee = afterMaterial * managementFeeRate; // 監工管理費
+    const subtotalWithProfit = afterMaterial + managementFee;
     const tax = subtotalWithProfit * taxRate;
     const total = subtotalWithProfit + tax;
 
     const breakdown = [
       { label: '工程費小計', value: subtotal },
-      { label: '管理監工費 (30%)', value: managementFee },
-      { label: '小計', value: afterManagement },
-      { label: '設計師利潤 (' + (profitMargin * 100).toFixed(0) + '%)', value: profitAmount },
+      { label: '材料利潤 (' + (profitMargin * 100).toFixed(0) + '%)', value: profitAmount },
+      { label: '小計', value: afterMaterial },
+      { label: '管理監工費 (' + (managementFeeRate * 100).toFixed(0) + '%)', value: managementFee },
       { label: '稅前小計', value: subtotalWithProfit }
     ];
 
@@ -457,9 +463,10 @@ const QuotationSystem = () => {
     return {
       items,
       subtotal,
-      managementFee,
-      afterManagement,
       profitAmount,
+      afterMaterial,
+      managementFeeRate,
+      managementFee,
       subtotalWithProfit,
       tax,
       total: includeTax ? total : subtotalWithProfit,
@@ -483,6 +490,7 @@ const QuotationSystem = () => {
         projectName,
         projectArea,
         profitMargin,
+        managementFeeRate,
         taxRate,
         quotation,
         timestamp: new Date().toLocaleString('zh-TW')
@@ -559,7 +567,8 @@ const QuotationSystem = () => {
       // 還原狀態
       setProjectName(raw.projectName || versionData.案件名稱 || '');
       setProjectArea(raw.projectArea || 48);
-      setProfitMargin(raw.profitMargin || 0.35);
+      setProfitMargin(raw.profitMargin || 0);
+      setManagementFeeRate(raw.managementFeeRate || 0.30);
       setTaxRate(raw.taxRate || 0.05);
 
       if (raw.quotation && raw.quotation.breakdown) {
@@ -756,12 +765,12 @@ const QuotationSystem = () => {
           </div>
           <div>
             <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
-              設計師利潤率
+              材料利潤率
             </label>
             <div className="relative">
               <input
                 type="number"
-                placeholder="0.35"
+                placeholder="0"
                 value={profitMargin}
                 step="0.01"
                 min="0"
@@ -793,9 +802,35 @@ const QuotationSystem = () => {
       </div>
 
       {/* 工班勾選 */}
-      <div className="rounded-xl p-6 border border-gray-100 bg-white shadow-sm">
-        <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>選擇工班</h3>
-        <p className="text-xs mb-4" style={{ color: '#005e99' }}>勾選本次報價涵蓋的工班，設計費為必選項目</p>
+      <div className="rounded-xl p-6 border border-gray-100 bg-white shadow-sm mt-6">
+        <div className="flex justify-between items-end mb-4">
+          <div>
+            <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>選擇工班</h3>
+            <p className="text-xs" style={{ color: '#005e99' }}>勾選本次報價涵蓋的工班，設計費為必選項目</p>
+          </div>
+          {/* 管理費設定 */}
+          <div className="w-32">
+            <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>
+              監工管理費率
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                placeholder="0.30"
+                value={managementFeeRate}
+                step="0.01"
+                min="0"
+                max="1"
+                onChange={(e) => setManagementFeeRate(parseFloat(e.target.value) || 0)}
+                className="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none pr-10"
+                style={{ borderColor: '#007bb8' }}
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>
+                {(managementFeeRate * 100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {availableWorkClasses.map(wc => (
             <label
