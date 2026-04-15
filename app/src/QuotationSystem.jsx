@@ -11,13 +11,14 @@ import { Download, Plus, Trash2, Eye, Save, RotateCcw, ChevronDown, Calendar, Bo
 const unitOptionsInitial = ['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點'];
 
 const QuotationSystem = () => {
-  const API_BASE = 'https://script.google.com/macros/s/AKfycbw7yqxg_ZMvrIpQyx9j5-Qj0EXtgBN8ULru4zl3Joiy2bNldPnKGeXgcGUyK4PbLefVhw/exec'; 
+  const API_BASE = 'https://script.google.com/macros/s/AKfycbw7yqxg_ZMvrIpQyx9j5-Qj0EXtgBN8ULru4zl3Joiy2bNldPnKGeXgcGUyK4PbLefVhw/exec';
 
   // ============ 狀態管理 ============
   const [step, setStep] = useState(1); // 1:工班選擇 2:細項編輯 3:計算與確認 4:版本預覽
   const [projectName, setProjectName] = useState('');
   const [projectArea, setProjectArea] = useState(48);
-  const [profitMargin, setProfitMargin] = useState(0); // 材料利潤預設改為0
+  const [profitMargin, setProfitMargin] = useState(''); // 空字串表示未填寫，此時會預設用系統設定
+  const [defaultProfitMargin, setDefaultProfitMargin] = useState(0); // 存入從系統抓下來的預設值
   const [managementFeeRate, setManagementFeeRate] = useState(0.30); // 項目管理費率%
   const [taxRate, setTaxRate] = useState(0.05);
   const [includeTax, setIncludeTax] = useState(false);
@@ -142,7 +143,7 @@ const QuotationSystem = () => {
           const json = await res.json();
           if (json.success && json.data) setVersions(json.data);
         }
-      } catch (err) {}
+      } catch (err) { }
     };
 
     const fetchConfig = async () => {
@@ -150,7 +151,7 @@ const QuotationSystem = () => {
         // Step 1: 先知道需不需要密碼（密碼本身不會酒露）
         const checkRes = await fetch(`${API_BASE}?action=checkNeedPassword`);
         const checkJson = await checkRes.json();
-        
+
         if (!checkJson.needPassword) {
           // 沒設密碼，直接放行
           setIsAuthenticated(true);
@@ -170,8 +171,8 @@ const QuotationSystem = () => {
         if (configRes.ok) {
           const json = await configRes.json();
           if (json.success && json.data) {
-            // // 預設強制為0，不再跟隨全域預設
-            // if (json.data.profit_margin) setProfitMargin(parseFloat(json.data.profit_margin));
+            // 抓取全域預設，若前台清空未填寫會採用這個值
+            if (json.data.profit_margin) setDefaultProfitMargin(parseFloat(json.data.profit_margin));
             if (json.data.tax_rate) setTaxRate(parseFloat(json.data.tax_rate));
             if (json.data.management_fee_rate) setManagementFeeRate(parseFloat(json.data.management_fee_rate));
           }
@@ -240,7 +241,7 @@ const QuotationSystem = () => {
 
       setProjectName(draft.projectName || '');
       setProjectArea(draft.projectArea || 48);
-      setProfitMargin(draft.profitMargin || 0);
+      setProfitMargin(draft.profitMargin !== undefined ? draft.profitMargin : '');
       setManagementFeeRate(draft.managementFeeRate || 0.30);
       setTaxRate(draft.taxRate || 0.05);
       setIncludeTax(draft.includeTax || false);
@@ -441,7 +442,8 @@ const QuotationSystem = () => {
       items.push(...categoryItems);
     }
 
-    const profitAmount = subtotal * profitMargin;       // 材料利潤 = 工程費小計 * ％
+    const currentProfitMargin = profitMargin === '' ? defaultProfitMargin : parseFloat(profitMargin);
+    const profitAmount = subtotal * currentProfitMargin;       // 材料利潤 = 工程費小計 * ％
     const afterMaterial = subtotal + profitAmount;      // 項目小計 = 工程費小計 + 材料利潤
 
     const managementFee = afterMaterial * managementFeeRate; // 監工管理費
@@ -451,7 +453,7 @@ const QuotationSystem = () => {
 
     const breakdown = [
       { label: '工程費小計', value: subtotal },
-      { label: '材料利潤 (' + (profitMargin * 100).toFixed(0) + '%) ', value: profitAmount },
+      { label: '材料利潤 (' + (currentProfitMargin * 100).toFixed(0) + '%) ', value: profitAmount },
       { label: ' 項目小計', value: afterMaterial },
       { label: '管理監工費 (' + (managementFeeRate * 100).toFixed(0) + '%)', value: managementFee },
       { label: '稅前小計', value: subtotalWithProfit }
@@ -492,7 +494,7 @@ const QuotationSystem = () => {
       const excelData = {
         projectName,
         projectArea,
-        profitMargin,
+        profitMargin: profitMargin === '' ? null : parseFloat(profitMargin),
         managementFeeRate,
         taxRate,
         quotation,
@@ -500,7 +502,11 @@ const QuotationSystem = () => {
       };
 
       // 上傳到 Google Drive 並記錄版本
-      const fileName = `${new Date().toISOString().split('T')[0]}_${projectName}_v${versions.length + 1}.xlsx`;
+      const today = new Date();
+      const dateStr = today.getFullYear().toString() +
+        String(today.getMonth() + 1).padStart(2, '0') +
+        String(today.getDate()).padStart(2, '0');
+      const fileName = `${projectName}_${dateStr}.xlsx`;
       const fileId = await uploadToGoogleDrive(excelData, fileName);
 
       // 記錄版本歷史
@@ -668,7 +674,7 @@ const QuotationSystem = () => {
     // 找出所有獨立的專案（只留每案最新一筆）
     const uniqueProjects = [];
     const handledNames = new Set();
-    
+
     versions.forEach(v => {
       if (v.案件名稱 && v.rawJson && !handledNames.has(v.案件名稱)) {
         handledNames.add(v.案件名稱);
@@ -679,261 +685,261 @@ const QuotationSystem = () => {
     return (
       <div className="space-y-6">
 
-      {/* 斷線草稿救援區塊 */}
-      {hasDraft && (
-        <div className="rounded-xl p-4 border flex flex-col md:flex-row items-center justify-between shadow-sm" style={{ background: '#fffbeb', borderColor: '#fcd34d' }}>
-          <div className="flex items-center gap-3 mb-3 md:mb-0">
-            <RotateCcw className="text-yellow-600 flex-shrink-0" size={24} />
+        {/* 斷線草稿救援區塊 */}
+        {hasDraft && (
+          <div className="rounded-xl p-4 border flex flex-col md:flex-row items-center justify-between shadow-sm" style={{ background: '#fffbeb', borderColor: '#fcd34d' }}>
+            <div className="flex items-center gap-3 mb-3 md:mb-0">
+              <RotateCcw className="text-yellow-600 flex-shrink-0" size={24} />
+              <div>
+                <h4 className="text-sm font-bold text-yellow-800">發現未完成的草稿</h4>
+                <p className="text-xs text-yellow-700 font-medium">我們為您保留了上次編輯到一半的資料，以防網路斷線或不小心關閉網頁。</p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={handleClearDraft} className="px-4 py-2 border border-yellow-400 text-xs font-semibold text-yellow-700 bg-yellow-50 rounded-lg hover:bg-yellow-100 transition">放棄並清空</button>
+              <button onClick={handleRestoreDraft} className="px-4 py-2 text-xs font-bold text-white rounded-lg bg-yellow-600 hover:bg-yellow-700 shadow-sm transition">還原草稿</button>
+            </div>
+          </div>
+        )}
+
+        {/* 基本信息 */}
+        <div className="rounded-xl p-6 border" style={{ background: 'linear-gradient(135deg, #f0f7ff 0%, #e0edf8 100%)', borderColor: '#7fb4e0' }}>
+          <div className="flex justify-between flex-wrap items-center mb-4">
             <div>
-              <h4 className="text-sm font-bold text-yellow-800">發現未完成的草稿</h4>
-              <p className="text-xs text-yellow-700 font-medium">我們為您保留了上次編輯到一半的資料，以防網路斷線或不小心關閉網頁。</p>
+              <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>基本信息</h3>
+              <p className="text-xs" style={{ color: '#005e99' }}>請填寫以下欄位，系統將自動計算報價</p>
             </div>
-          </div>
-          <div className="flex gap-2 flex-shrink-0">
-            <button onClick={handleClearDraft} className="px-4 py-2 border border-yellow-400 text-xs font-semibold text-yellow-700 bg-yellow-50 rounded-lg hover:bg-yellow-100 transition">放棄並清空</button>
-            <button onClick={handleRestoreDraft} className="px-4 py-2 text-xs font-bold text-white rounded-lg bg-yellow-600 hover:bg-yellow-700 shadow-sm transition">還原草稿</button>
-          </div>
-        </div>
-      )}
 
-      {/* 基本信息 */}
-      <div className="rounded-xl p-6 border" style={{ background: 'linear-gradient(135deg, #f0f7ff 0%, #e0edf8 100%)', borderColor: '#7fb4e0' }}>
-        <div className="flex justify-between flex-wrap items-center mb-4">
-          <div>
-            <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>基本信息</h3>
-            <p className="text-xs" style={{ color: '#005e99' }}>請填寫以下欄位，系統將自動計算報價</p>
-          </div>
-          
-          {uniqueProjects.length > 0 && (
-            <div className="mt-2 md:mt-0">
-              <select
-                onChange={(e) => {
-                  if (e.target.value) {
-                    if (window.confirm("載入專案將覆蓋目前填寫的狀態，確定要載入嗎？")) {
-                      const v = uniqueProjects.find(p => p.案件名稱 === e.target.value);
-                      if (v) handleEditVersion(v);
+            {uniqueProjects.length > 0 && (
+              <div className="mt-2 md:mt-0">
+                <select
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      if (window.confirm("載入專案將覆蓋目前填寫的狀態，確定要載入嗎？")) {
+                        const v = uniqueProjects.find(p => p.案件名稱 === e.target.value);
+                        if (v) handleEditVersion(v);
+                      }
+                      e.target.value = ""; // 觸發後重置回預設選項
                     }
-                    e.target.value = ""; // 觸發後重置回預設選項
-                  }
+                  }}
+                  className="px-3 py-1.5 border-2 rounded-lg text-sm bg-white font-bold cursor-pointer transition shadow-sm outline-none"
+                  style={{ borderColor: '#007bb8', color: '#005e99' }}
+                >
+                  <option value="">📂 從雲端載入既有專案...</option>
+                  {uniqueProjects.map(p => (
+                    <option key={p.案件名稱} value={p.案件名稱}>
+                      {p.案件名稱} (最新版 {p.版本號})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
+                案件名稱 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="例：地址/姓氏/公館商空"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition"
+                style={{ borderColor: '#7fb4e0', background: 'white' }}
+                onFocus={e => e.target.style.borderColor = '#007bb8'}
+                onBlur={e => e.target.style.borderColor = '#7fb4e0'}
+              />
+              <p className="text-xs mt-1" style={{ color: '#4a9cd4' }}>輸入客戶名稱或案件代稱</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
+                室內坪數 <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  placeholder="48"
+                  value={projectArea}
+                  onChange={(e) => setProjectArea(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition pr-10"
+                  style={{ borderColor: '#7fb4e0', background: 'white' }}
+                  onFocus={e => e.target.style.borderColor = '#007bb8'}
+                  onBlur={e => e.target.style.borderColor = '#7fb4e0'}
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>坪</span>
+              </div>
+              <p className="text-xs mt-1" style={{ color: '#4a9cd4' }}>室內實際面積（不含公設）</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
+                材料利潤率
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={profitMargin}
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  onChange={(e) => setProfitMargin(e.target.value === '' ? '' : e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition pr-10"
+                  style={{ borderColor: '#7fb4e0', background: 'white' }}
+                  onFocus={e => e.target.style.borderColor = '#007bb8'}
+                  onBlur={e => e.target.style.borderColor = '#7fb4e0'}
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>
+                  {((profitMargin === '' ? defaultProfitMargin : parseFloat(profitMargin)) * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="includeTax"
+              checked={includeTax}
+              onChange={(e) => setIncludeTax(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="includeTax" className="text-sm font-semibold" style={{ color: '#003f7f' }}>
+              顯示 5% 營業稅
+            </label>
+          </div>
+        </div>
+
+        {/* 工班勾選 */}
+        <div className="rounded-xl p-6 border border-gray-100 bg-white shadow-sm mt-6">
+          <div className="flex justify-between items-end mb-4">
+            <div>
+              <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>選擇工班</h3>
+              <p className="text-xs" style={{ color: '#005e99' }}>勾選本次報價涵蓋的工班，設計費為必選項目</p>
+            </div>
+            {/* 管理費設定 */}
+            <div className="w-32">
+              <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>
+                監工管理費率
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  placeholder="0.30"
+                  value={managementFeeRate}
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  onChange={(e) => setManagementFeeRate(parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none pr-10"
+                  style={{ borderColor: '#007bb8' }}
+                />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>
+                  {(managementFeeRate * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {availableWorkClasses.map(wc => (
+              <label
+                key={wc.code}
+                className="flex items-center p-3.5 border-2 rounded-xl cursor-pointer transition-all"
+                style={{
+                  borderColor: selectedWorkClasses.has(wc.code) ? '#007bb8' : '#e2e8f0',
+                  background: selectedWorkClasses.has(wc.code) ? '#f0f7ff' : 'white',
                 }}
-                className="px-3 py-1.5 border-2 rounded-lg text-sm bg-white font-bold cursor-pointer transition shadow-sm outline-none"
-                style={{ borderColor: '#007bb8', color: '#005e99' }}
               >
-                <option value="">📂 從雲端載入既有專案...</option>
-                {uniqueProjects.map(p => (
-                  <option key={p.案件名稱} value={p.案件名稱}>
-                    {p.案件名稱} (最新版 {p.版本號})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+                <input
+                  type="checkbox"
+                  checked={selectedWorkClasses.has(wc.code)}
+                  onChange={(e) => {
+                    if (!wc.必選) {
+                      const updated = new Set(selectedWorkClasses);
+                      if (e.target.checked) updated.add(wc.code);
+                      else updated.delete(wc.code);
+                      setSelectedWorkClasses(updated);
+                    }
+                  }}
+                  disabled={wc.必選}
+                  className="w-4 h-4 rounded"
+                  style={{ accentColor: '#007bb8' }}
+                />
+                <span className="ml-3 text-sm font-medium" style={{ color: '#002b5c' }}>{wc.名稱}</span>
+                {wc.必選 && (
+                  <span className="ml-auto text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#005e99' }}>必選</span>
+                )}
+              </label>
+            ))}
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <div>
-            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
-              案件名稱 <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              placeholder="例：地址/姓氏/公館商空"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition"
-              style={{ borderColor: '#7fb4e0', background: 'white' }}
-              onFocus={e => e.target.style.borderColor = '#007bb8'}
-              onBlur={e => e.target.style.borderColor = '#7fb4e0'}
-            />
-            <p className="text-xs mt-1" style={{ color: '#4a9cd4' }}>輸入客戶名稱或案件代稱</p>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
-              室內坪數 <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
+        {/* 新增自訂工班 */}
+        <div className="rounded-xl p-6 border-2" style={{ borderColor: '#4a9cd4', background: 'linear-gradient(135deg, #f5faff 0%, #eaf4fc 100%)' }}>
+          <h3 className="text-base font-bold mb-1 flex items-center gap-2" style={{ color: '#002b5c' }}>
+            <Plus size={18} />
+            新增自訂工班
+          </h3>
+          <p className="text-xs mb-4" style={{ color: '#005e99' }}>自訂工班將自動保存為範本，下次可直接選用</p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>工班名稱</label>
               <input
-                type="number"
-                placeholder="48"
-                value={projectArea}
-                onChange={(e) => setProjectArea(parseFloat(e.target.value) || 0)}
-                className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition pr-10"
-                style={{ borderColor: '#7fb4e0', background: 'white' }}
-                onFocus={e => e.target.style.borderColor = '#007bb8'}
-                onBlur={e => e.target.style.borderColor = '#7fb4e0'}
+                type="text"
+                placeholder="例：智能家居控制系統安裝"
+                value={customWorkClass}
+                onChange={(e) => setCustomWorkClass(e.target.value)}
+                className="w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none"
+                style={{ borderColor: '#4a9cd4', background: 'white' }}
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>坪</span>
             </div>
-            <p className="text-xs mt-1" style={{ color: '#4a9cd4' }}>室內實際面積（不含公設）</p>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#003f7f' }}>
-              材料利潤率
-            </label>
-            <div className="relative">
-              <input
-                type="number"
-                placeholder="0"
-                value={profitMargin}
-                step="0.01"
-                min="0"
-                max="1"
-                onChange={(e) => setProfitMargin(parseFloat(e.target.value) || 0)}
-                className="w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none transition pr-10"
-                style={{ borderColor: '#7fb4e0', background: 'white' }}
-                onFocus={e => e.target.style.borderColor = '#007bb8'}
-                onBlur={e => e.target.style.borderColor = '#7fb4e0'}
+            <div>
+              <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>細項列表</label>
+              <p className="text-xs mb-2" style={{ color: '#2490bf' }}>格式：細項名稱, 數量, 單位, 工資, 單價（每行一個）</p>
+              <textarea
+                placeholder={`風管安裝, 20, 米, 300, 500\nAI主機安裝, 1, 式, 5000, 15000`}
+                value={customWorkItems}
+                onChange={(e) => setCustomWorkItems(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none font-mono"
+                style={{ borderColor: '#4a9cd4', background: 'white' }}
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>
-                {(profitMargin * 100).toFixed(0)}%
-              </span>
             </div>
-          </div>
-        </div>
-        <div className="mt-4 flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="includeTax"
-            checked={includeTax}
-            onChange={(e) => setIncludeTax(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          <label htmlFor="includeTax" className="text-sm font-semibold" style={{ color: '#003f7f' }}>
-            顯示 5% 營業稅
-          </label>
-        </div>
-      </div>
-
-      {/* 工班勾選 */}
-      <div className="rounded-xl p-6 border border-gray-100 bg-white shadow-sm mt-6">
-        <div className="flex justify-between items-end mb-4">
-          <div>
-            <h3 className="text-base font-bold mb-1" style={{ color: '#002b5c' }}>選擇工班</h3>
-            <p className="text-xs" style={{ color: '#005e99' }}>勾選本次報價涵蓋的工班，設計費為必選項目</p>
-          </div>
-          {/* 管理費設定 */}
-          <div className="w-32">
-            <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>
-              監工管理費率
-            </label>
-            <div className="relative">
-              <input
-                type="number"
-                placeholder="0.30"
-                value={managementFeeRate}
-                step="0.01"
-                min="0"
-                max="1"
-                onChange={(e) => setManagementFeeRate(parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none pr-10"
-                style={{ borderColor: '#007bb8' }}
-              />
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm font-medium" style={{ color: '#005e99' }}>
-                {(managementFeeRate * 100).toFixed(0)}%
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {availableWorkClasses.map(wc => (
-            <label
-              key={wc.code}
-              className="flex items-center p-3.5 border-2 rounded-xl cursor-pointer transition-all"
-              style={{
-                borderColor: selectedWorkClasses.has(wc.code) ? '#007bb8' : '#e2e8f0',
-                background: selectedWorkClasses.has(wc.code) ? '#f0f7ff' : 'white',
-              }}
+            <button
+              onClick={handleAddCustomWorkClass}
+              className="w-full text-white font-semibold py-2.5 rounded-lg transition flex items-center justify-center gap-2 hover:opacity-90"
+              style={{ background: 'linear-gradient(90deg, #007bb8, #005e99)' }}
             >
-              <input
-                type="checkbox"
-                checked={selectedWorkClasses.has(wc.code)}
-                onChange={(e) => {
-                  if (!wc.必選) {
-                    const updated = new Set(selectedWorkClasses);
-                    if (e.target.checked) updated.add(wc.code);
-                    else updated.delete(wc.code);
-                    setSelectedWorkClasses(updated);
-                  }
-                }}
-                disabled={wc.必選}
-                className="w-4 h-4 rounded"
-                style={{ accentColor: '#007bb8' }}
-              />
-              <span className="ml-3 text-sm font-medium" style={{ color: '#002b5c' }}>{wc.名稱}</span>
-              {wc.必選 && (
-                <span className="ml-auto text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#005e99' }}>必選</span>
-              )}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* 新增自訂工班 */}
-      <div className="rounded-xl p-6 border-2" style={{ borderColor: '#4a9cd4', background: 'linear-gradient(135deg, #f5faff 0%, #eaf4fc 100%)' }}>
-        <h3 className="text-base font-bold mb-1 flex items-center gap-2" style={{ color: '#002b5c' }}>
-          <Plus size={18} />
-          新增自訂工班
-        </h3>
-        <p className="text-xs mb-4" style={{ color: '#005e99' }}>自訂工班將自動保存為範本，下次可直接選用</p>
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>工班名稱</label>
-            <input
-              type="text"
-              placeholder="例：智能家居控制系統安裝"
-              value={customWorkClass}
-              onChange={(e) => setCustomWorkClass(e.target.value)}
-              className="w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none"
-              style={{ borderColor: '#4a9cd4', background: 'white' }}
-            />
+              <Plus size={16} />
+              新增自訂工班（自動保存範本）
+            </button>
           </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: '#003f7f' }}>細項列表</label>
-            <p className="text-xs mb-2" style={{ color: '#2490bf' }}>格式：細項名稱, 數量, 單位, 工資, 單價（每行一個）</p>
-            <textarea
-              placeholder={`風管安裝, 20, 米, 300, 500\nAI主機安裝, 1, 式, 5000, 15000`}
-              value={customWorkItems}
-              onChange={(e) => setCustomWorkItems(e.target.value)}
-              rows={4}
-              className="w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none font-mono"
-              style={{ borderColor: '#4a9cd4', background: 'white' }}
-            />
+        </div>
+
+        {/* 訊息提示 */}
+        {error && (
+          <div className="rounded-lg p-4 flex gap-3 border" style={{ background: '#fff8f8', borderColor: '#fca5a5' }}>
+            <AlertCircle className="text-red-500 flex-shrink-0" size={18} />
+            <p className="text-sm text-red-700">{error}</p>
           </div>
-          <button
-            onClick={handleAddCustomWorkClass}
-            className="w-full text-white font-semibold py-2.5 rounded-lg transition flex items-center justify-center gap-2 hover:opacity-90"
-            style={{ background: 'linear-gradient(90deg, #007bb8, #005e99)' }}
-          >
-            <Plus size={16} />
-            新增自訂工班（自動保存範本）
-          </button>
-        </div>
+        )}
+        {success && (
+          <div className="rounded-lg p-4 flex gap-3 border" style={{ background: '#f0fdf4', borderColor: '#86efac' }}>
+            <CheckCircle className="text-green-600 flex-shrink-0" size={18} />
+            <p className="text-sm text-green-700">{success}</p>
+          </div>
+        )}
+
+        {/* 下一步 */}
+        <button
+          onClick={() => { setError(''); setStep(2); }}
+          className="w-full text-white font-bold py-3.5 rounded-xl transition hover:opacity-90 shadow-lg"
+          style={{ background: 'linear-gradient(90deg, #007bb8 0%, #005e99 100%)' }}
+        >
+          下一步：編輯細項 →
+        </button>
       </div>
-
-      {/* 訊息提示 */}
-      {error && (
-        <div className="rounded-lg p-4 flex gap-3 border" style={{ background: '#fff8f8', borderColor: '#fca5a5' }}>
-          <AlertCircle className="text-red-500 flex-shrink-0" size={18} />
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg p-4 flex gap-3 border" style={{ background: '#f0fdf4', borderColor: '#86efac' }}>
-          <CheckCircle className="text-green-600 flex-shrink-0" size={18} />
-          <p className="text-sm text-green-700">{success}</p>
-        </div>
-      )}
-
-      {/* 下一步 */}
-      <button
-        onClick={() => { setError(''); setStep(2); }}
-        className="w-full text-white font-bold py-3.5 rounded-xl transition hover:opacity-90 shadow-lg"
-        style={{ background: 'linear-gradient(90deg, #007bb8 0%, #005e99 100%)' }}
-      >
-        下一步：編輯細項 →
-      </button>
-    </div>
-  );
+    );
   };
 
   // 步驟 2: 細項編輯
@@ -995,8 +1001,8 @@ const QuotationSystem = () => {
                     </thead>
                     <tbody>
                       {items.map((item, idx) => (
-                        <tr 
-                          key={idx} 
+                        <tr
+                          key={idx}
                           className={`border-t hover:bg-gray-50 transition-colors ${draggedItemIdx === idx ? 'bg-blue-50 opacity-50' : ''}`}
                           draggable={dragEnabledIdx === idx}
                           onDragStart={(e) => {
@@ -1022,7 +1028,7 @@ const QuotationSystem = () => {
                           <td className="px-4 py-2 text-gray-700 whitespace-nowrap">
                             {isEditing ? (
                               <div className="flex items-center gap-2">
-                                <div 
+                                <div
                                   className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-blue-600 p-1 rounded hover:bg-gray-200 transition"
                                   onMouseDown={() => setDragEnabledIdx(idx)}
                                   onMouseUp={() => setDragEnabledIdx(null)}
@@ -1071,18 +1077,18 @@ const QuotationSystem = () => {
                           </td>
                           <td className="px-4 py-2 text-center">
                             {isEditing ? (
-                                <select
-                                  value={item.單位}
-                                  onChange={(e) => {
-                                    const updated = [...editingItems];
-                                    updated[idx].單位 = e.target.value;
-                                    setEditingItems(updated);
-                                  }}
-                                  className="w-full text-center px-1 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer font-medium text-sm"
-                                >
-                                  {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
-                                  {!unitOptions.includes(item.單位) && <option value={item.單位}>{item.單位}</option>}
-                                </select>
+                              <select
+                                value={item.單位}
+                                onChange={(e) => {
+                                  const updated = [...editingItems];
+                                  updated[idx].單位 = e.target.value;
+                                  setEditingItems(updated);
+                                }}
+                                className="w-full text-center px-1 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer font-medium text-sm"
+                              >
+                                {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                                {!unitOptions.includes(item.單位) && <option value={item.單位}>{item.單位}</option>}
+                              </select>
                             ) : (
                               <span className="font-medium">{item.單位}</span>
                             )}
@@ -1274,10 +1280,10 @@ const QuotationSystem = () => {
                   <div
                     key={idx}
                     className={`flex justify-between ${isTotal
-                        ? 'text-base font-bold pt-3 mt-1 border-t-2'
-                        : isSubtotal
-                          ? 'text-sm font-semibold pt-2 border-t'
-                          : 'text-sm'
+                      ? 'text-base font-bold pt-3 mt-1 border-t-2'
+                      : isSubtotal
+                        ? 'text-sm font-semibold pt-2 border-t'
+                        : 'text-sm'
                       }`}
                     style={{
                       color: isTotal ? '#001a3e' : isSubtotal ? '#002b5c' : '#005e99',
@@ -1442,7 +1448,7 @@ const QuotationSystem = () => {
           </div>
           <h2 className="text-xl font-bold text-gray-800 mb-2">系統已鎖定</h2>
           <p className="text-sm text-gray-500 mb-6">請輸入密碼以存取報價單系統</p>
-          
+
           <input
             type="password"
             value={passwordInput}
@@ -1452,9 +1458,9 @@ const QuotationSystem = () => {
             autoFocus
             disabled={loginLoading}
           />
-          
+
           {error && <p className="text-red-500 text-sm mb-4 font-bold animate-pulse">{error}</p>}
-          
+
           <button
             type="submit"
             disabled={loginLoading || !passwordInput}
@@ -1501,10 +1507,10 @@ const QuotationSystem = () => {
               <button
                 onClick={() => s.num <= step && setStep(s.num)}
                 className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all shadow-md ${step === s.num
-                    ? 'text-white scale-110'
-                    : step > s.num
-                      ? 'text-white'
-                      : 'text-brand-300'
+                  ? 'text-white scale-110'
+                  : step > s.num
+                    ? 'text-white'
+                    : 'text-brand-300'
                   }`}
                 style={{
                   background: step === s.num ? '#007bb8' : step > s.num ? '#2490bf' : 'rgba(255,255,255,0.15)',

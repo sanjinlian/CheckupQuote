@@ -163,7 +163,7 @@ function login(inputPassword) {
 // 內部函數：產生今日旋轉的 token
 function _generateToken(password) {
   const today = new Date();
-  const dateStr = today.getFullYear() + '-' + (today.getMonth()+1) + '-' + today.getDate();
+  const dateStr = today.getFullYear() + '-' + (today.getMonth() + 1) + '-' + today.getDate();
   const raw = password + '|' + dateStr + '|CheckupQuote';
   const bytes = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
@@ -345,9 +345,20 @@ function uploadExcel(data) {
   const tempSS = SpreadsheetApp.openById(tempFile.getId());
   const sheet = tempSS.getSheets()[0]; // 寫入到範本的第一個分頁
 
+  // 將工作表 tab 名稱改為「專案名稱_日期」
+  const tabToday = new Date();
+  const tabDateStr = tabToday.getFullYear().toString() +
+    String(tabToday.getMonth() + 1).padStart(2, '0') +
+    String(tabToday.getDate()).padStart(2, '0');
+  const tabName = (excelData.projectName || '報價單') + '_' + tabDateStr;
+  sheet.setName(tabName.substring(0, 31)); // Excel tab 名稱上限 31 字元
+
+  // 2. 抓取公司設定，供填入表頭
+  const companyConfig = _fetchCompanyConfig();
+
   try {
-    // 2. 填寫資料（只填值，不寫死樣式）
-    fillQuotationData(sheet, excelData, excelData.quotation);
+    // 3. 填寫資料（只填值，不寫死樣式）
+    fillQuotationData(sheet, excelData, excelData.quotation, companyConfig);
 
     // 3. 強制寫入並等待生效
     SpreadsheetApp.flush();
@@ -378,8 +389,21 @@ function uploadExcel(data) {
   }
 }
 
+// ============ 內部：讀取公司設定（含密碼，純內部使用）============
+function _fetchCompanyConfig() {
+  try {
+    const sheet = SpreadsheetApp.openById(CONFIG.SHEET_ID)
+      .getSheetByName(CONFIG.SHEETS.COMPANY_CONFIG);
+    if (!sheet || sheet.getLastRow() < 2) return {};
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    const config = {};
+    data.forEach(row => { if (row[0]) config[row[0]] = row[1]; });
+    return config;
+  } catch (e) { return {}; }
+}
+
 // ============ 填入報價單數據（依照範本填寫）============
-function fillQuotationData(sheet, excelData, quotation) {
+function fillQuotationData(sheet, excelData, quotation, companyConfig = {}) {
   // 1. 尋找範本的「結尾列 (footerRow)」：從 Row 7 往下找，第一個有任何資料的列就會認定為 Footer 的開頭 (例如「以下空白」)。
   let footerRow = -1;
   const maxRows = sheet.getMaxRows();
@@ -393,6 +417,43 @@ function fillQuotationData(sheet, excelData, quotation) {
     }
   }
 
+  // ── Row 2: 公司表頭 ──
+
+  // A2: 公司 Logo（靠左）
+  const logoUrl = (companyConfig.company_logo_url || '').toString().trim();
+  if (logoUrl) {
+    try {
+      const imgBlob = UrlFetchApp.fetch(logoUrl, { muteHttpExceptions: true }).getBlob();
+      sheet.insertImage(imgBlob, 1, 2); // col 1 = A, row 2
+    } catch (imgErr) {
+      Logger.log('Logo 載入失敗，略過: ' + imgErr);
+    }
+  }
+
+  // B2: 公司名稱（粗體，靠左）
+  const companyName = (companyConfig.company_name || '').toString().trim();
+  if (companyName) {
+    sheet.getRange('B2')
+      .setValue(companyName)
+      .setFontWeight('bold')
+      .setHorizontalAlignment('left')
+      .setVerticalAlignment('middle');
+  }
+
+  // H2: 統一編號 / 地址 / 承辦人（換行，靠右）
+  const infoLines = [
+    companyConfig.tax_id ? `統編：${companyConfig.tax_id}` : '',
+    companyConfig.address ? companyConfig.address.toString() : '',
+    companyConfig.contact_person ? `承辦：${companyConfig.contact_person}` : ''
+  ].filter(Boolean).join('\n');
+  if (infoLines) {
+    sheet.getRange('H2')
+      .setValue(infoLines)
+      .setHorizontalAlignment('right')
+      .setVerticalAlignment('top')
+      .setWrap(true);
+  }
+
   // Row 4: 報價單日期
   const today = new Date();
   const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
@@ -402,8 +463,10 @@ function fillQuotationData(sheet, excelData, quotation) {
   sheet.getRange('A5').setValue('案名');
   sheet.getRange('B5').setValue(excelData.projectName);
 
-  // Row 6: 動態更新利潤率表頭 (E6)
-  const profitHeader = excelData.profitMargin ? Number(excelData.profitMargin) : 0.35;
+  // Row 6: E6 = 前台輸入的材料利潤率（直接使用，不做 falsy 判斷，0 也是合法值）
+  const profitHeader = excelData.profitMargin != null
+    ? Number(excelData.profitMargin)
+    : Number(companyConfig.profit_margin || 0);
   sheet.getRange('E6').setValue(profitHeader);
 
   // 整理資料：將資料依工班分組
@@ -433,6 +496,8 @@ function fillQuotationData(sheet, excelData, quotation) {
     }
   };
 
+  const subtotalRows = []; // 記錄每個工班「項目小計」所在的列號，用於最終總計公式
+
   for (const catName of sortedGroups) {
     const items = categories[catName];
 
@@ -448,50 +513,71 @@ function fillQuotationData(sheet, excelData, quotation) {
     row++;
 
     let catTotal = 0;
+    const itemStartRow = row; // 記錄此工班細項起始列，用於 SUM 公式
     // 輸出細項
     items.forEach((item, index) => {
       ensureRow();
-      
+
+      const f = Number(item.單價 || item.price) || 0;
+      const c = Number(item.量 || item.quantity) || 0;
+      // 用 profitHeader（即 E6 的值）計算 catTotal，使其與公式結果匹配
+      const eVal = f * profitHeader;
+      catTotal += f * c + eVal;
+
+      // 先寫非公式欄位（E、G 先填空，之後用 setFormula 覆蓋）
       const rowData = [
         index + 1,                       // A: 項次
         item.名稱 || item.name || '',      // B: 名稱
-        item.量 || item.quantity || '',    // C: 數量
+        c || '',                          // C: 數量
         item.單位 || item.unit || '',      // D: 單位
-        item.工資 || '',                  // E: 0.35/工資
-        item.單價 || item.price || '',     // F: 單價
-        item.複價 || '',                  // G: 複價
-        item.備註 || ''                   // H: 備註
+        '',                               // E: 工資（後補公式）
+        f || '',                          // F: 單價
+        '',                               // G: 複價（後補公式）
+        item.備註 || ''                    // H: 備註
       ];
       sheet.getRange(row, 1, 1, 8).setValues([rowData])
-           .setFontColor('#000000') 
-           .setFontWeight('normal')
-           .setFontSize(14)
-           .setVerticalAlignment('middle');
-           
+        .setFontColor('#000000')
+        .setFontWeight('normal')
+        .setFontSize(14)
+        .setVerticalAlignment('middle');
+
+      // E 欄公式：工資 = 單價 × $E$6（利潤率）
+      sheet.getRange(row, 5).setFormula(`=F${row}*$E$6`);
+      // G 欄公式：複價 = 單價 × 數量 + 工資
+      sheet.getRange(row, 7).setFormula(`=F${row}*C${row}+E${row}`);
+
       sheet.getRange(row, 1).setHorizontalAlignment('center'); // 項次置中
-      sheet.getRange(row, 2).setHorizontalAlignment('left'); // 品名靠左
+      sheet.getRange(row, 2).setHorizontalAlignment('left');   // 品名靠左
       sheet.getRange(row, 3, 1, 6).setHorizontalAlignment('right'); // 數字金額靠右
-      
-      // 金額加上千分位
+
+      // 千分位格式
       sheet.getRange(row, 5, 1, 3).setNumberFormat('#,##0');
 
-      const sub = Number(item.複價) || (Number(item.量) * Number(item.單價)) || 0;
-      catTotal += sub;
       row++;
     });
 
-    // 項目小計剛好就在這個工班細項的下一列
+    const itemEndRow = row - 1; // 此工班最後一個細項列
+
+    // 項目小計：G 欄用 SUM 公式加總此工班所有 G 欄
     ensureRow();
     sheet.getRange(row, 1, 1, 8).setFontWeight('normal').setFontSize(14);
-    sheet.getRange(row, 2).setValue('項目小計').setHorizontalAlignment('right');
-    sheet.getRange(row, 7).setValue(catTotal).setFontWeight('bold').setNumberFormat('#,##0').setHorizontalAlignment('right');
+    sheet.getRange(row, 2, 1, 5).merge()  // 合併 B~F
+      .setValue('項目小計')
+      .setHorizontalAlignment('right')
+      .setVerticalAlignment('middle');
+    sheet.getRange(row, 7)
+      .setFormula(`=SUM(G${itemStartRow}:G${itemEndRow})`)
+      .setFontWeight('bold')
+      .setNumberFormat('#,##0')
+      .setHorizontalAlignment('right');
+    subtotalRows.push(row); // 記錄此列，供最後總計使用
     overallTotal += catTotal;
     row++;
   }
 
   // 因為使用者已經在範本最下方預設好相同的「備註、簽署」等說明，
   // 這裡不再由程式重複新增，以免和範本疊加。
-  
+
   // 清理可能多餘的預留空白列 (使生成的細項與 footer 完美貼合)
   if (footerRow !== -1 && footerRow > row) {
     sheet.deleteRows(row, footerRow - row);
@@ -507,9 +593,18 @@ function fillQuotationData(sheet, excelData, quotation) {
   if (remainingRows > 0) {
     const bottomValues = sheet.getRange(row, 1, remainingRows, 8).getValues();
     for (let r = 0; r < bottomValues.length; r++) {
-      if (String(bottomValues[r][1]).includes('總計')) { 
-        sheet.getRange(row + r, 7).setValue(overallTotal).setNumberFormat('"NT$"#,##0').setFontWeight('bold');
-        break; 
+      if (String(bottomValues[r][1]).includes('總計')) {
+        if (subtotalRows.length > 0) {
+          // 用 SUM 加總所有工班小計的 G 欄，完全公式化
+          const sumParts = subtotalRows.map(r => `G${r}`).join('+');
+          sheet.getRange(row + r, 7)
+            .setFormula(`=${sumParts}`)
+            .setNumberFormat('"NT$"#,##0')
+            .setFontWeight('bold');
+        } else {
+          sheet.getRange(row + r, 7).setValue(overallTotal).setNumberFormat('"NT$"#,##0').setFontWeight('bold');
+        }
+        break;
       }
     }
   }
@@ -549,10 +644,10 @@ function getUniqueUnits() {
   try {
     const spreadsheet = SpreadsheetApp.openById(CONFIG.SHEET_ID);
     const units = new Set(['式', '才', '尺', '坪', '組', '個', '樘', '車', '人', '捲', '戶', '片', '門', '處', '點']);
-    
+
     // 掃描模板表與自訂表
     const sheetsToScan = [CONFIG.SHEETS.WORK_ITEM_TEMPLATES, CONFIG.SHEETS.CUSTOM_WORK_ITEMS];
-    
+
     sheetsToScan.forEach(sheetName => {
       const sheet = spreadsheet.getSheetByName(sheetName);
       if (sheet && sheet.getLastRow() >= 2) {
