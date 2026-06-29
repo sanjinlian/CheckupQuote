@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+/* eslint-disable no-unused-vars, no-empty, no-useless-escape */
+import React, { useState, useEffect } from 'react';
 import { Download, Plus, Trash2, Eye, Save, RotateCcw, ChevronDown, Calendar, BookOpen, AlertCircle, CheckCircle, TrendingUp, Lock, ArrowUp, ArrowDown, Menu } from 'lucide-react';
 
 /**
@@ -18,6 +19,7 @@ const QuotationSystem = () => {
   const [projectName, setProjectName] = useState('');
   const [projectArea, setProjectArea] = useState(48);
   const [profitMargin, setProfitMargin] = useState(0); // 材料利潤預設改為0
+  const [defaultProfitMargin, setDefaultProfitMargin] = useState(0);
   const [managementFeeRate, setManagementFeeRate] = useState(0.30); // 項目管理費率%
   const [taxRate, setTaxRate] = useState(0.05);
   const [includeTax, setIncludeTax] = useState(false);
