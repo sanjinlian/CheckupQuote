@@ -343,7 +343,18 @@ function uploadExcel(data) {
   const templateFile = DriveApp.getFileById(CONFIG.TEMPLATE_ID);
   const tempFile = templateFile.makeCopy('temp_' + fileName);
   const tempSS = SpreadsheetApp.openById(tempFile.getId());
-  const sheet = tempSS.getSheets()[0]; // 寫入到範本的第一個分頁
+  
+  // 建立需要寫入的工作表
+  const sheet1 = tempSS.getSheets()[0]; 
+  let sheet2 = null;
+  const hasHidden = excelData.hiddenQuotation && excelData.hiddenQuotation.items && excelData.hiddenQuotation.items.length > 0;
+  
+  if (hasHidden) {
+    // 為了拿到乾淨的範本，我們從原本的範本中複製一張空白的進來
+    const originalSS = SpreadsheetApp.openById(CONFIG.TEMPLATE_ID);
+    const originalSheet = originalSS.getSheets()[0];
+    sheet2 = originalSheet.copyTo(tempSS);
+  }
 
   // 將工作表 tab 名稱改為「專案名稱_日期」
   const tabToday = new Date();
@@ -351,14 +362,25 @@ function uploadExcel(data) {
     String(tabToday.getMonth() + 1).padStart(2, '0') +
     String(tabToday.getDate()).padStart(2, '0');
   const tabName = (excelData.projectName || '報價單') + '_' + tabDateStr;
-  sheet.setName(tabName.substring(0, 31)); // Excel tab 名稱上限 31 字元
+  sheet1.setName(tabName.substring(0, 31)); // Excel tab 名稱上限 31 字元
+
+  if (sheet2) {
+    sheet2.setName('隱藏項目_表格二');
+  }
 
   // 2. 抓取公司設定，供填入表頭
   const companyConfig = _fetchCompanyConfig();
 
   try {
     // 3. 填寫資料（只填值，不寫死樣式）
-    fillQuotationData(sheet, excelData, excelData.quotation, companyConfig);
+    // 使用 mainQuotation 填入主表
+    const mainQuotation = excelData.mainQuotation || excelData.quotation; // 兼容舊版資料
+    fillQuotationData(sheet1, excelData, mainQuotation, companyConfig);
+
+    // 如果有隱藏表，填入第二張表
+    if (hasHidden && sheet2) {
+      fillQuotationData(sheet2, excelData, excelData.hiddenQuotation, companyConfig);
+    }
 
     // 3. 強制寫入並等待生效
     SpreadsheetApp.flush();
@@ -520,9 +542,13 @@ function fillQuotationData(sheet, excelData, quotation, companyConfig = {}) {
 
       const f = Number(item.單價 || item.price) || 0;
       const c = Number(item.量 || item.quantity) || 0;
-      // 用 profitHeader（即 E6 的值）計算 catTotal，使其與公式結果匹配
-      const eVal = f * profitHeader;
-      catTotal += f * c + eVal;
+      const isNoPrice = item.isNoPrice;
+      
+      if (!isNoPrice) {
+        // 用 profitHeader（即 E6 的值）計算 catTotal，使其與公式結果匹配
+        const eVal = f * c * profitHeader;
+        catTotal += f * c + eVal;
+      }
 
       // 先寫非公式欄位（E、G 先填空，之後用 setFormula 覆蓋）
       const rowData = [
@@ -530,9 +556,9 @@ function fillQuotationData(sheet, excelData, quotation, companyConfig = {}) {
         item.名稱 || item.name || '',      // B: 名稱
         c || '',                          // C: 數量
         item.單位 || item.unit || '',      // D: 單位
-        '',                               // E: 工資（後補公式）
-        f || '',                          // F: 單價
-        '',                               // G: 複價（後補公式）
+        isNoPrice ? '另計' : '',            // E: 工資（後補公式或維持另計）
+        isNoPrice ? '另計' : (f || ''),      // F: 單價
+        isNoPrice ? '另計' : '',            // G: 複價（後補公式或維持另計）
         item.備註 || ''                    // H: 備註
       ];
       sheet.getRange(row, 1, 1, 8).setValues([rowData])
@@ -541,17 +567,20 @@ function fillQuotationData(sheet, excelData, quotation, companyConfig = {}) {
         .setFontSize(14)
         .setVerticalAlignment('middle');
 
-      // E 欄公式：工資 = 單價 × $E$6（利潤率）
-      sheet.getRange(row, 5).setFormula(`=F${row}*$E$6`);
-      // G 欄公式：複價 = 單價 × 數量 + 工資
-      sheet.getRange(row, 7).setFormula(`=F${row}*C${row}+E${row}`);
+      if (!isNoPrice) {
+        // E 欄公式：工資 = 數量 × 單價 × $E$6（利潤率）
+        sheet.getRange(row, 5).setFormula(`=C${row}*F${row}*$E$6`);
+        // G 欄公式：複價 = 單價 × 數量 + 工資
+        sheet.getRange(row, 7).setFormula(`=F${row}*C${row}+E${row}`);
+        
+        sheet.getRange(row, 3, 1, 6).setHorizontalAlignment('right'); // 數字金額靠右
+        sheet.getRange(row, 5, 1, 3).setNumberFormat('#,##0'); // 千分位格式
+      } else {
+        sheet.getRange(row, 5, 1, 3).setHorizontalAlignment('center'); // "另計" 字樣置中
+      }
 
       sheet.getRange(row, 1).setHorizontalAlignment('center'); // 項次置中
       sheet.getRange(row, 2).setHorizontalAlignment('left');   // 品名靠左
-      sheet.getRange(row, 3, 1, 6).setHorizontalAlignment('right'); // 數字金額靠右
-
-      // 千分位格式
-      sheet.getRange(row, 5, 1, 3).setNumberFormat('#,##0');
 
       row++;
     });

@@ -17,13 +17,13 @@ const QuotationSystem = () => {
   const [step, setStep] = useState(1); // 1:工班選擇 2:細項編輯 3:計算與確認 4:版本預覽
   const [projectName, setProjectName] = useState('');
   const [projectArea, setProjectArea] = useState(48);
-  const [profitMargin, setProfitMargin] = useState(''); // 空字串表示未填寫，此時會預設用系統設定
-  const [defaultProfitMargin, setDefaultProfitMargin] = useState(0); // 存入從系統抓下來的預設值
+  const [profitMargin, setProfitMargin] = useState(0); // 材料利潤預設改為0
   const [managementFeeRate, setManagementFeeRate] = useState(0.30); // 項目管理費率%
   const [taxRate, setTaxRate] = useState(0.05);
   const [includeTax, setIncludeTax] = useState(false);
   const [availableWorkClasses, setAvailableWorkClasses] = useState([]);
   const [selectedWorkClasses, setSelectedWorkClasses] = useState(new Set());
+  const [workClassStatuses, setWorkClassStatuses] = useState({}); // 'normal', 'no_price', 'hidden'
   const [customWorkClass, setCustomWorkClass] = useState('');
   const [customWorkItems, setCustomWorkItems] = useState('');
   const [workClassDetails, setWorkClassDetails] = useState({});
@@ -226,11 +226,12 @@ const QuotationSystem = () => {
       taxRate,
       includeTax,
       selectedWorkClasses: Array.from(selectedWorkClasses),
+      workClassStatuses,
       workClassDetails,
       timestamp: new Date().getTime()
     };
     localStorage.setItem('CheckupQuote_Draft', JSON.stringify(draft));
-  }, [projectName, projectArea, profitMargin, managementFeeRate, taxRate, includeTax, selectedWorkClasses, workClassDetails]);
+  }, [projectName, projectArea, profitMargin, managementFeeRate, taxRate, includeTax, selectedWorkClasses, workClassStatuses, workClassDetails]);
 
   // ============ 操作草稿 ============
   const handleRestoreDraft = () => {
@@ -246,6 +247,9 @@ const QuotationSystem = () => {
       setTaxRate(draft.taxRate || 0.05);
       setIncludeTax(draft.includeTax || false);
       setSelectedWorkClasses(new Set(draft.selectedWorkClasses || []));
+      if (draft.workClassStatuses) {
+        setWorkClassStatuses(draft.workClassStatuses);
+      }
       if (draft.workClassDetails) {
         setWorkClassDetails(draft.workClassDetails);
       }
@@ -421,32 +425,17 @@ const QuotationSystem = () => {
   };
 
   // ============ 計算報價 ============
-  const calculateQuotation = () => {
-    const items = [];
+  const calculateQuotationGroup = (groupItems, currentProfitMargin) => {
     let subtotal = 0;
+    groupItems.forEach(item => {
+      if (!item.isNoPrice) {
+        subtotal += item.複價;
+      }
+    });
 
-    for (const [code, details] of Object.entries(workClassDetails)) {
-      if (!selectedWorkClasses.has(code)) continue;
-
-      const workClass = availableWorkClasses.find(w => w.code === code);
-      const categoryItems = details.map(item => {
-        const subPrice = item.量 * item.單價;
-        subtotal += subPrice;
-        return {
-          ...item,
-          複價: subPrice,
-          工班: workClass.名稱
-        };
-      });
-
-      items.push(...categoryItems);
-    }
-
-    const currentProfitMargin = profitMargin === '' ? defaultProfitMargin : parseFloat(profitMargin);
-    const profitAmount = subtotal * currentProfitMargin;       // 材料利潤 = 工程費小計 * ％
-    const afterMaterial = subtotal + profitAmount;      // 項目小計 = 工程費小計 + 材料利潤
-
-    const managementFee = afterMaterial * managementFeeRate; // 監工管理費
+    const profitAmount = subtotal * currentProfitMargin;
+    const afterMaterial = subtotal + profitAmount;
+    const managementFee = afterMaterial * managementFeeRate;
     const subtotalWithProfit = afterMaterial + managementFee;
     const tax = subtotalWithProfit * taxRate;
     const total = subtotalWithProfit + tax;
@@ -466,7 +455,7 @@ const QuotationSystem = () => {
     breakdown.push({ label: '合計', value: includeTax ? total : subtotalWithProfit });
 
     return {
-      items,
+      items: groupItems,
       subtotal,
       profitAmount,
       afterMaterial,
@@ -476,6 +465,44 @@ const QuotationSystem = () => {
       tax,
       total: includeTax ? total : subtotalWithProfit,
       breakdown
+    };
+  };
+
+  const calculateQuotation = () => {
+    const mainItems = [];
+    const hiddenItems = [];
+    const currentProfitMargin = profitMargin === '' ? defaultProfitMargin : parseFloat(profitMargin);
+
+    for (const [code, details] of Object.entries(workClassDetails)) {
+      if (!selectedWorkClasses.has(code)) continue;
+
+      const workClass = availableWorkClasses.find(w => w.code === code);
+      const status = workClassStatuses[code] || 'normal';
+
+      const categoryItems = details.map(item => {
+        const subPrice = item.量 * item.單價;
+        return {
+          ...item,
+          複價: subPrice,
+          工班: workClass.名稱,
+          isNoPrice: status === 'no_price'
+        };
+      });
+
+      if (status === 'hidden') {
+        hiddenItems.push(...categoryItems);
+      } else {
+        mainItems.push(...categoryItems);
+      }
+    }
+
+    const mainQuotation = calculateQuotationGroup(mainItems, currentProfitMargin);
+    const hiddenQuotation = hiddenItems.length > 0 ? calculateQuotationGroup(hiddenItems, currentProfitMargin) : null;
+
+    return {
+      ...mainQuotation, // Spread main quotation for backward compatibility with UI
+      mainQuotation,
+      hiddenQuotation
     };
   };
 
@@ -624,6 +651,14 @@ const QuotationSystem = () => {
 
         setSelectedWorkClasses(selected);
         setWorkClassDetails(details);
+        if (raw.workClassStatuses) {
+          setWorkClassStatuses(raw.workClassStatuses);
+        } else {
+          // Backward compatibility: default to 'normal' for existing versions
+          const statuses = {};
+          selected.forEach(code => statuses[code] = 'normal');
+          setWorkClassStatuses(statuses);
+        }
       }
 
       setStep(1); // 跳轉回步驟一
@@ -974,17 +1009,42 @@ const QuotationSystem = () => {
 
           return (
             <div key={code} className="rounded-xl border-2 overflow-hidden" style={{ borderColor: '#4a9cd4' }}>
-              <div className="px-6 py-4 flex justify-between items-center" style={{ background: 'linear-gradient(90deg, #002b5c, #005e99)' }}>
-                <h3 className="font-bold text-base" style={{ color: '#a7c6ed' }}>{workClass.名稱}</h3>
+              <div className="px-6 py-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3" style={{ background: 'linear-gradient(90deg, #002b5c, #005e99)' }}>
+                <div className="flex items-baseline gap-4">
+                  <h3 className="font-bold text-base" style={{ color: '#a7c6ed' }}>{workClass.名稱}</h3>
+                  <span className="text-sm font-semibold text-blue-200">
+                    小計: ${items.reduce((sum, item) => sum + (item.量 * item.單價), 0).toLocaleString()}
+                  </span>
+                </div>
                 {!isEditing && (
-                  <div className="flex gap-2">
-                    <button onClick={() => handleMoveWorkClass(code, 'up')} className="text-white hover:text-blue-300 p-1 transition" title="上移工班"><ArrowUp size={16} /></button>
-                    <button onClick={() => handleMoveWorkClass(code, 'down')} className="text-white hover:text-blue-300 p-1 transition" title="下移工班"><ArrowDown size={16} /></button>
+                  <div className="flex items-center gap-3">
+                    <select
+                      value={workClassStatuses[code] || 'normal'}
+                      onChange={(e) => {
+                        setWorkClassStatuses({
+                          ...workClassStatuses,
+                          [code]: e.target.value
+                        });
+                      }}
+                      className="px-2 py-1 rounded text-xs font-bold border-none outline-none"
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        color: workClassStatuses[code] === 'hidden' ? '#fca5a5' : workClassStatuses[code] === 'no_price' ? '#fde047' : '#a7c6ed'
+                      }}
+                    >
+                      <option value="normal" style={{ color: '#000' }}>🔵 正常列入</option>
+                      <option value="no_price" style={{ color: '#000' }}>🟡 僅列項目</option>
+                      <option value="hidden" style={{ color: '#000' }}>🔴 移至隱藏表</option>
+                    </select>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleMoveWorkClass(code, 'up')} className="text-white hover:text-blue-300 p-1 transition" title="上移工班"><ArrowUp size={16} /></button>
+                      <button onClick={() => handleMoveWorkClass(code, 'down')} className="text-white hover:text-blue-300 p-1 transition" title="下移工班"><ArrowDown size={16} /></button>
+                    </div>
                   </div>
                 )}
               </div>
 
-              <div className="p-6">
+              <div className={`p-6 ${workClassStatuses[code] === 'hidden' ? 'opacity-50 grayscale bg-gray-50' : ''}`}>
                 {/* 細項表格 */}
                 <div className="overflow-x-auto mb-4">
                   <table className="w-full text-sm">
